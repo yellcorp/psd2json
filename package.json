@@ -1,0 +1,29 @@
+{
+  "name": "@yellcorp/psd2json",
+  "version": "0.0.1",
+  "description": "Export PSDs to JSON+images",
+  "keywords": [
+    "adobe",
+    "export",
+    "extendscript",
+    "json",
+    "photoshop",
+    "psd"
+  ],
+  "license": "MIT",
+  "author": "Jim Boswell <jimb@yellcorp.org> (http://yellcorp.org)",
+  "files": [
+    "src"
+  ],
+  "main": "src/psd2json.js",
+  "devDependencies": {
+    "eslint": "^4.3.0",
+    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3"
+  },
+  "scripts": {
+    "lint": "eslint -- src/**/*.js"
+  },
+  "peerDependencies": {
+    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3"
+  }
+}
