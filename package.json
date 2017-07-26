@@ -1,6 +1,6 @@
 {
   "name": "@yellcorp/psd2json",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Export PSDs to JSON+images",
   "keywords": [
     "adobe",
@@ -17,8 +17,8 @@
   ],
   "main": "src/psd2json.js",
   "devDependencies": {
-    "eslint": "^4.3.0",
-    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3"
+    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3",
+    "eslint": "^4.3.0"
   },
   "scripts": {
     "lint": "eslint -- src/**/*.js"
