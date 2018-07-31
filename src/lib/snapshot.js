@@ -324,7 +324,7 @@ function LayerSnapshot(layer) {
   this.parent = null;
   this.document = null;
 
-  return addCommonSnapshotProperties(this);
+  addCommonSnapshotProperties(this);
 }
 
 
