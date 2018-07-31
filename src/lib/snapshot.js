@@ -197,7 +197,7 @@ function DocumentSnapshot(doc) {
   // this.historyStates
   // this.info
   // this.layerComps
-  this.managed = doc.managed;
+  this.managed = false; // Doesn't work in newest Photoshop CC (July 2018)
   // this.measurementScale
   this.mode = doc.mode;
   this.name = doc.name;
