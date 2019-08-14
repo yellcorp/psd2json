@@ -19,18 +19,32 @@ function arrayContains(search, value) {
 }
 
 
+var IGNORABLE_ERROR_PATTERN =
+  /General.Photoshop.error.occurred.+This.functionality.may.not.be.available/i;
+
+function isIgnorableError(error) {
+  return error && IGNORABLE_ERROR_PATTERN.test(String(error));
+}
+
+
 function copyProps(source, target, propFuncPairs) {
   for (var i = 0; i < propFuncPairs.length; i++) {
     var pair = propFuncPairs[i];
     var name = pair[0];
     var copyFunc = pair[1];
 
-    try {
-      target[name] = copyFunc ? copyFunc(source[name]) :
-                                source[name];
-    } catch (error) {
-      $.writeln("copyProps: caught error while copying property '" + name + "': " + error);
-      target[name] = null;
+    // Not all versions of Photoshop support the full set of properties. Only
+    // copy the ones that exist.
+    if (name in source) {
+      try {
+        target[name] = copyFunc ? copyFunc(source[name]) :
+                                  source[name];
+      } catch (error) {
+        if (!isIgnorableError(error)) {
+          $.writeln("copyProps: caught error while copying property '" + name + "': " + error);
+        }
+        target[name] = null;
+      }
     }
   }
   return target;
@@ -183,37 +197,41 @@ function addCommonSnapshotProperties(s) {
 function DocumentSnapshot(doc) {
   this.live = doc;
 
-  this.bitsPerChannel = doc.bitsPerChannel;
-  // this.channels;
-  this.colorProfileName = doc.colorProfileName;
-  this.colorProfileType = doc.colorProfileType;
-  this.colorSamplers = arraycopy(doc.colorSamplers);
-  // this.componentChannels
-  // this.countItems
-  this.fullName = doc.fullName; // a File object representing this document's file
-  // this.guides
-  this.height = copyUnitValue(doc.height);
-  // this.histogram
-  // this.historyStates
-  // this.info
-  // this.layerComps
-  this.managed = false; // Doesn't work in newest Photoshop CC (July 2018)
-  // this.measurementScale
-  this.mode = doc.mode;
-  this.name = doc.name;
+  copyProps(doc, this, [
+    [ "bitsPerChannel", null ],
+    // [ "channels", null ],
+    [ "colorProfileName", null ],
+    [ "colorProfileType", null ],
+    [ "colorSamplers", arraycopy ],
+    // [ "componentChannels", null ],
+    // [ "countItems", null ],
+    [ "fullName", null ], // a File object representing this document's file
+    // [ "guides", null ],
+    [ "height", copyUnitValue ],
+    // [ "histogram", null ],
+    // [ "historyStates", null ],
+    // [ "info", null ],
+    // [ "layerComps", null ],
+    [ "managed", null ], // Support dropped by Photoshop CC 2018
+    // [ "measurementScale", null ],
+    [ "mode", null ],
+    [ "name", null ],
 
-  // the docs explain this badly but this is the folder that the file is stored
-  // in. in other words, it is doc.fullName.parent. it is a Folder object
-  this.path = doc.path;
-  // this.pathItems
-  this.pixelAspectRatio = doc.pixelAspectRatio;
-  // this.printSettings
-  this.resolution = doc.resolution;
-  this.saved = doc.saved;
-  // this.selection
-  this.typename = doc.typename;
-  this.width = copyUnitValue(doc.width);
-  this.xmpMetadata = doc.xmpMetadata; // copy??
+    // the docs explain this badly but this is the folder that the file is
+    // stored in. in other words, it is doc.fullName.parent. it is a Folder
+    // object
+    [ "path", null ],
+
+    // [ "pathItems", null ],
+    [ "pixelAspectRatio", null ],
+    // [ "printSettings", null ],
+    [ "resolution", null ],
+    [ "saved", null ],
+    // [ "selection", null ],
+    [ "typename", null ],
+    [ "width", copyUnitValue ],
+    [ "xmpMetadata", null ], // Should there be a copy function for this?
+  ]);
 
   this.size = [ this.width, this.height ];
   this.bounds = [
@@ -258,50 +276,65 @@ function LayerSnapshot(layer) {
   this.live = layer;
 
   // common
-  this.allLocked = layer.allLocked;
-  this.blendMode = layer.blendMode;
-  this.bounds = arraycopy(layer.bounds).map(copyUnitValue);
-  this.linkedLayers = arraycopy(layer.linkedLayers); // should be layerinfo?
-  this.name = layer.name;
-  this.opacity = layer.opacity;
-  this.typename = layer.typename;
-  this.visible = layer.visible;
+  copyProps(layer, this, [
+    [ "allLocked", null ],
+    [ "blendMode", null ],
+    [ "bounds", mapper(copyUnitValue) ],
 
-  this.size = [ this.bounds[2] - this.bounds[0], this.bounds[3] - this.bounds[1] ];
+    // these end up being live layers, should they be LayerSnapshots?
+    [ "linkedLayers", arraycopy ],
+
+    [ "name", null ],
+    [ "opacity", null ],
+    [ "typename", null ],
+    [ "visible", null ],
+  ]);
+
+  this.size = [
+    this.bounds[2] - this.bounds[0],
+    this.bounds[3] - this.bounds[1]
+  ];
 
   switch (this.typename) {
   case "ArtLayer":
-    this.boundsNoEffects = arraycopy(layer.boundsNoEffects).map(copyUnitValue);
-    this.fillOpacity = layer.fillOpacity;
-    this.filterMaskDensity = layer.filterMaskDensity;
-    this.filterMaskFeather = layer.filterMaskFeather;
-    this.grouped = layer.grouped;
-    this.isBackgroundLayer = layer.isBackgroundLayer;
-    this.kind = layer.kind;
-    this.layerMaskDensity = layer.layerMaskDensity;
-    this.layerMaskFeather = layer.layerMaskFeather;
-    this.pixelsLocked = layer.pixelsLocked;
-    this.positionLocked = layer.positionLocked;
+    copyProps(layer, this, [
+      [ "boundsNoEffects", mapper(copyUnitValue) ],
+      [ "fillOpacity", null ],
+      [ "filterMaskDensity", null ],
+      [ "filterMaskFeather", null ],
+      [ "grouped", null ],
+      [ "isBackgroundLayer", null ],
+      [ "kind", null ],
+      [ "layerMaskDensity", null ],
+      [ "layerMaskFeather", null ],
+      [ "pixelsLocked", null ],
+      [ "positionLocked", null ],
+      [ "transparentPixelsLocked", null ],
+      [ "vectorMaskDensity", null ],
+      [ "vectorMaskFeather", null ],
+      [ "xmpMetadata", null ], // Should there be a copy function for this?
+    ]);
 
+    this.textItem = null;
     if (layer.kind === LayerKind.TEXT) {
-      this.textItem = copyTextItem(layer.textItem);
-    } else {
-      this.textItem = null;
+      copyProps(layer, this, [
+        [ "textItem", copyTextItem ]
+      ]);
     }
 
-    this.transparentPixelsLocked = layer.transparentPixelsLocked;
-    this.vectorMaskDensity = layer.vectorMaskDensity;
-    this.vectorMaskFeather = layer.vectorMaskFeather;
-    this.xmpMetadata = layer.xmpMetadata; // copy??
-
-    this.sizeNoEffects = [
-      this.boundsNoEffects[2] - this.boundsNoEffects[0],
-      this.boundsNoEffects[3] - this.boundsNoEffects[1]
-    ];
+    if (this.boundsNoEffects) {
+      this.sizeNoEffects = [
+        this.boundsNoEffects[2] - this.boundsNoEffects[0],
+        this.boundsNoEffects[3] - this.boundsNoEffects[1]
+      ];
+    }
     break;
 
   case "LayerSet":
-    this.enabledChannels = arraycopy(layer.enabledChannels);
+    copyProps(layer, this, [
+      [ "enabledChannels", arraycopy ]
+    ]);
+
     this.grouped = false;
     this.layers =
     this.artLayers =
