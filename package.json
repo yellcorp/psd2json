@@ -12,18 +12,22 @@
   ],
   "license": "MIT",
   "author": "Jim Boswell <jimb@yellcorp.org> (http://yellcorp.org)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yellcorp/psd2json.git"
+  },
   "files": [
     "src"
   ],
   "main": "src/psd2json.js",
   "devDependencies": {
-    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3",
-    "eslint": "^4.3.0"
+    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.6",
+    "eslint": "^4.18.2"
   },
   "scripts": {
     "lint": "eslint -- src/**/*.js"
   },
   "peerDependencies": {
-    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.3"
+    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.6"
   }
 }
