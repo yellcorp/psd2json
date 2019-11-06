@@ -14,10 +14,11 @@
 
 
 var fileutil = require("./xslib/fileutil");
-var namers   = require("./lib/namers");
-var psutil   = require("./lib/psutil");
+var namers = require("./lib/namers");
+var psutil = require("./lib/psutil");
 var snapshot = require("./lib/snapshot");
-var wrangler = require("./lib/wrangler");
+var interpretSaveOptions =
+  require("./lib/saveoptions/interpret").interpretSaveOptions;
 
 
 var GLYPH_TITLE_SEPARATOR = " \u2023 ";
@@ -71,7 +72,7 @@ function documentNameForLayer(layerSnapshot) {
 
 
 function saveLayerDoc(doc, inFolder, baseName, formatObject) {
-  var saveOptions = wrangler.interpret(formatObject, DEFAULT_SAVE_OPTIONS);
+  var saveOptions = interpretSaveOptions(formatObject, DEFAULT_SAVE_OPTIONS);
   var formatExtension = psutil.fileSuffixForSaveOptions(saveOptions);
   var file = new File(
     inFolder.absoluteURI + "/" +
@@ -323,7 +324,6 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
         index = -1; // incremented to 0 at end of loop
 
         logFunc(GLYPH_OKLF);
-
       } else if (action === EXPORT) {
         logFunc(logIndent + GLYPH_EXPORT + layerSnapshot.name);
 
