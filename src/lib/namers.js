@@ -4,14 +4,56 @@
 var fnvhash = require("./fnvhash");
 
 
+function escapeChar(c) {
+  var cc = c.charCodeAt(0);
+  return (cc < 16 ? "%0" : "%") + cc.toString(16).toUpperCase();
+}
+
+
+// percent and comma are added because percent escapes, and comma separates
+// layer path segments
+var FS_NAME_ESCAPE = /[\x00-\x1f"*\x2F:<>?\\|%,]/g;
 function sanitizeStringPart(string) {
-  // over-cautious, but has to be as restrictive as Save for Web unless i can
-  // figure out how to get the adjusted filename back
-  return string
-    .replace(/\s+/g, " ")
-    .replace(/[\x00-\x2F:-@\x5B-`{-\x7F\xA0]+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "");
+  return string.replace(
+    FS_NAME_ESCAPE,
+    function (match) {
+      return escapeChar(match);
+    }
+  );
+}
+
+
+var NTFS_BAD_NAMES = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i;
+function sanitizeWholeName(name) {
+  if (name === ".") {
+    return "%2E";
+  }
+
+  if (name === "..") {
+    return "%2E%2E";
+  }
+
+  // Windows has a list of forbidden ancient words. Escape the third character
+  // if it matches - this will roughly maintain sort order.
+  if (NTFS_BAD_NAMES.test(name + ".")) {
+    name = name.substring(0, 2) +
+      escapeChar(name[2]) +
+      name.substring(3);
+  }
+
+  // Windows doesn't allow ending a name with a space or dot. Escape the last
+  // character if it's one of those. While we're here - do the same with the
+  // first character. It's allowed but spaces at the beginning of a filename
+  // are just as confusing, and leading dots create hidden files - let's avoid
+  // that as well.
+  name = name.replace(
+    /^[. ]|[. ]$/,
+    function (match) {
+      return escapeChar(match);
+    }
+  );
+
+  return name;
 }
 
 
@@ -22,7 +64,7 @@ function stringArrayToFilename(array) {
     sanitized[i] = sanitizeStringPart(array[i]);
   }
 
-  return sanitized.join("_");
+  return sanitizeWholeName(sanitized.join(","));
 }
 
 

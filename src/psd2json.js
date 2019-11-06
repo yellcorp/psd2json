@@ -2,7 +2,6 @@
   $,
   ColorProfile,
   ExportOptionsSaveForWeb,
-  ExportType,
   Extension
   File,
   Folder,
@@ -16,6 +15,7 @@
 
 var fileutil = require("./xslib/fileutil");
 var namers   = require("./lib/namers");
+var psutil   = require("./lib/psutil");
 var snapshot = require("./lib/snapshot");
 var wrangler = require("./lib/wrangler");
 
@@ -27,28 +27,15 @@ var GLYPH_SKIP = "\u2205 ";
 var GLYPH_OKLF = " \u2713\n";
 var LOG_INDENT = "  ";
 
-var DEFAULT_SAVE_OPTIONS = (function () {
-  var dso = new PNGSaveOptions();
-  dso.compression = 4;
-  dso.interlaced = false;
-  return dso;
-}());
+var DEFAULT_SAVE_OPTIONS = new PNGSaveOptions();
+DEFAULT_SAVE_OPTIONS.compression = 4;
+DEFAULT_SAVE_OPTIONS.interlaced = false;
 
 var NAMER_LOOKUP = {
   counter:   namers.counterNamer,
   hash:      namers.hashNamer,
   layerPath: namers.layerPathNamer
 };
-
-
-function enumToString(enumValue) {
-  var string = enumValue.toString();
-  var dot = string.indexOf(".");
-  if (dot >= 0) {
-    return string.substr(dot + 1);
-  }
-  return string;
-}
 
 
 function unitValueArrayAs(uvs, unitType) {
@@ -85,13 +72,16 @@ function documentNameForLayer(layerSnapshot) {
 
 function saveLayerDoc(doc, inFolder, baseName, formatObject) {
   var saveOptions = wrangler.interpret(formatObject, DEFAULT_SAVE_OPTIONS);
-  var formatExtension = wrangler.extensionForOptions(saveOptions);
-  var file = new File(inFolder.absoluteURI + "/" + escape(baseName + formatExtension));
+  var formatExtension = psutil.fileSuffixForSaveOptions(saveOptions);
+  var file = new File(
+    inFolder.absoluteURI + "/" +
+    escape(baseName + formatExtension)
+  );
   file.parent.create();
   app.activeDocument = doc;
 
   if (saveOptions instanceof ExportOptionsSaveForWeb) {
-    doc.exportDocument(file, ExportType.SAVEFORWEB, saveOptions);
+    psutil.saveForWeb(doc, file, saveOptions);
   } else {
     doc.saveAs(file, saveOptions, true, Extension.LOWERCASE);
   }
@@ -153,8 +143,7 @@ function dontLog(_) {
  *   of its parent layer set(s).
  *   (TODO: could just output the product of the layer opac and its parents)
  * @param {Boolean} [options.verbose=false] - If `true`, log progress
- *   information to the ExtendScript Toolkit's JavaScript Console. The default
- *   is `false`.
+ *   information to the Debug Console. The default is `false`.
  * @param {Boolean|EnterLayerSetCallback} [options.shouldEnterLayerSet=false] -
  *   A {@link EnterLayerSetCallback} that decides whether a layer set should
  *   have its contents exported individually. When a layer set is encountered,
@@ -226,6 +215,9 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
   // parent opacities, layer sets must be exported, because opacity information
   // is attached to them. if we are exporting a flat document, we lose that
   // information, and opacity must be flattened.
+  //
+  // TODO: actually just accumulate the opacity by keeping a running product,
+  // or something like that
   if (!optionExportTree) {
     optionFlattenOpacity = true;
   }
@@ -279,6 +271,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
       }
 
       var exportLayer, clientData;
+      // eslint-disable-next-line no-negated-condition
       if (action !== SKIP) {
         layerSnapshot.setLiveVisible(true);
         if (layerSnapshot.anyLocked) {
@@ -290,7 +283,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
           layerPath: layerSnapshot.layerPath.slice(),
           indexPath: layerSnapshot.indexPath.slice(),
           index: layerSnapshot.index,
-          mode: enumToString(layerSnapshot.blendMode)
+          mode: psutil.enumName(layerSnapshot.blendMode)
         };
         exportArray.unshift(exportLayer);
 
@@ -435,7 +428,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
  * * An object literal, which allows for simpler, more concise inline option
  *   expression without having to construct a new options instance and assign
  *   properties. Property names are the same as their corresponding Photoshop
- *   classes, with the following changes:
+ *   classes, with the following differences:
  *     - A `format` property must be present, set to one of the values listed
  *       above for string values.
  *     - For formats supported by Save for Web (`gif`, `jpeg` and `png`), a

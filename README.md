@@ -11,5 +11,5 @@ Makes use of Node/NPM/CommonJS-style modularization through
 
 ## License
 
-Copyright (c) 2017 Jim Boswell.  Licensed under the Expat MIT license.  See the
+Copyright (c) 2019 Jim Boswell.  Licensed under the Expat MIT license.  See the
 file LICENSE for the full text.
