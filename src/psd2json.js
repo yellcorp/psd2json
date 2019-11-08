@@ -417,6 +417,8 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
   outJsonFile.parent.create();
   fileutil.writeJson(outJsonFile, outJson, { space: " " });
 
+  logFunc("Completed psd2json with document " + doc.name);
+
   return 0;
 }
 
