@@ -158,15 +158,14 @@ function dontLog(_) {
  *   opacity. That is for example, a solid layer at 25% opacity will appear 25%
  *   opaque in a PNG file. If `false`, layers will have their opacity set to
  *   100% before exporting, and their original opacity will appear in the JSON
- *   file under an `opacity` property, in the range 0-1.
+ *   file under an `opacity` property, in the range 0-100.
  * @param {Boolean} [options.exportTree=true] - Whether to reflect the
  *   structure of layer sets (layer folders) in the JSON file. If `true` (the
  *   default), layer sets will appear in the JSON file with a `set` key having
  *   the value `true`, and child layers/sets will appear in a `layers` array of
- *   its own. Note: setting this to `false` forces `flattenOpacity` to be
- *   `true`, as final opacity is dependent on not just a layer, but the opacity
- *   of its parent layer set(s).
- *   (TODO: could just output the product of the layer opac and its parents)
+ *   its own. If `false`, all layer sets will be omitted and all layers will
+ *   appear in a root-level 'layers' array in the same order they appear in the
+ *   Photoshop document (i.e. a depth-first traversal).
  * @param {Boolean} [options.outsideBounds=false] - Whether to export the
  *   entirety of layers that fall outside the document canvas. If `false`,
  *   layers that are partially outside the document canvas will be cropped to
@@ -245,17 +244,6 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
   var createNamer = NAMER_LOOKUP[namerKey] || NAMER_LOOKUP.hash;
   var generateName = createNamer();
 
-  // because the opacity of a layer is the product of its opacity and all its
-  // parent opacities, layer sets must be exported, because opacity information
-  // is attached to them. if we are exporting a flat document, we lose that
-  // information, and opacity must be flattened.
-  //
-  // TODO: actually just accumulate the opacity by keeping a running product,
-  // or something like that
-  if (!optionExportTree) {
-    optionFlattenOpacity = true;
-  }
-
   var outJson = {
     profile: (
         doc.colorProfileType === ColorProfile.CUSTOM ||
@@ -282,7 +270,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
   var docSnapshot = new snapshot.DocumentSnapshot(doc).prepare();
   logFunc(GLYPH_OKLF);
 
-  stack.push([ docSnapshot, outJson.layers, 0, "" ]);
+  stack.push([ docSnapshot, outJson.layers, 0, "", 100 ]);
 
   while (stack.length > 0) {
     var state = stack.pop();
@@ -291,6 +279,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
     var exportArray = state[1];
     var index = state[2];
     var logIndent = state[3];
+    var cumulativeOpacity = state[4];
 
     while (index < containerSnapshot.layers.length) {
       var layerSnapshot = containerSnapshot.layers[index];
@@ -337,8 +326,11 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
         }
 
         if (!optionFlattenOpacity) {
-          exportLayer.opacity = layerSnapshot.opacity / 100;
-          if (layerSnapshot.opacity !== 100) {
+          exportLayer.opacity = optionExportTree ?
+            layerSnapshot.opacity :
+            (layerSnapshot.opacity * cumulativeOpacity / 100);
+
+          if (layerSnapshot.opacity < 100) {
             layerSnapshot.live.opacity = 100;
           }
         }
@@ -349,8 +341,15 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
       if (action === ENTER) {
         logFunc(logIndent + GLYPH_ENTER + layerSnapshot.name);
 
-        stack.push([ containerSnapshot, exportArray, index + 1, logIndent ]);
+        stack.push([
+          containerSnapshot,
+          exportArray,
+          index + 1,
+          logIndent,
+          cumulativeOpacity
+        ]);
 
+        cumulativeOpacity *= layerSnapshot.opacity / 100;
         if (optionExportTree) {
           exportLayer.set = true;
           exportLayer.layers = [ ];
@@ -369,8 +368,8 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
 
         if (layerSnapshot.typename === "ArtLayer") {
           if (!optionFlattenOpacity) {
-            exportLayer.fillOpacity = layerSnapshot.fillOpacity / 100;
-            if (layerSnapshot.fillOpacity !== 100) {
+            exportLayer.fillOpacity = layerSnapshot.fillOpacity;
+            if (layerSnapshot.fillOpacity < 100) {
               layerSnapshot.live.fillOpacity = 100;
             }
           }
