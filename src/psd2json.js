@@ -209,6 +209,9 @@ function dontLog(_) {
  *   duplicate names.
  */
 function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
+  // TODO: this function is too long and the flattened recursion could
+  // probably be clarified
+
   if (typeof doc === "string") {
     doc = new File(doc);
   }
