@@ -48,6 +48,30 @@ function unitValueArrayAs(uvs, unitType) {
 }
 
 
+function revealAll(doc) {
+  doc.selection.selectAll();
+  var originalBounds = unitValueArrayAs(doc.selection.bounds, "px");
+  doc.revealAll();
+  var newBounds = unitValueArrayAs(doc.selection.bounds, "px");
+  doc.selection.deselect();
+
+  return [
+    originalBounds[0] - newBounds[0],
+    originalBounds[1] - newBounds[1]
+  ];
+}
+
+
+function translateNumericBounds(boundsValues, delta) {
+  return [
+    boundsValues[0] + delta[0],
+    boundsValues[1] + delta[1],
+    boundsValues[2] + delta[0],
+    boundsValues[3] + delta[1]
+  ];
+}
+
+
 function flattenedTrimmedCopy(doc, newDocumentName) {
   var flatDoc = doc.duplicate(newDocumentName, true);
   var bounds = flatDoc.layers[0].bounds;
@@ -143,6 +167,14 @@ function dontLog(_) {
  *   `true`, as final opacity is dependent on not just a layer, but the opacity
  *   of its parent layer set(s).
  *   (TODO: could just output the product of the layer opac and its parents)
+ * @param {Boolean} [options.outsideBounds=false] - Whether to export the
+ *   entirety of layers that fall outside the document canvas. If `false`,
+ *   layers that are partially outside the document canvas will be cropped to
+ *   the document edges, and layers that are wholly outside the canvas will be
+ *   skipped. If `true`, all layers will be exported fully. This is achieved by
+ *   executing Image > Reveal All, though layer coordinates use the top left of
+ *   the original document as its origin. This means that layer bounds can be
+ *   negative in this mode.
  * @param {Boolean} [options.verbose=false] - If `true`, log progress
  *   information to the Debug Console. The default is `false`.
  * @param {Boolean|EnterLayerSetCallback} [options.shouldEnterLayerSet=false] -
@@ -203,6 +235,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
 
   var optionFlattenOpacity = options.flattenOpacity !== false;
   var optionExportTree = options.tree !== false;
+  var optionOutsideBounds = Boolean(options.outsideBounds);
   var logFunc = options.verbose ? log : dontLog;
   var enterFolderCallback = coerceBooleanFunction(options.shouldEnterLayerSet, false);
   var exportLayerCallback = coerceBooleanFunction(options.shouldExportLayer, true);
@@ -232,13 +265,20 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
     layers: [ ],
     options: {
       flattenedOpacity: optionFlattenOpacity,
-      tree: optionExportTree
+      tree: optionExportTree,
+      outsideBounds: optionOutsideBounds
     }
   };
 
   var stack = [ ];
 
   logFunc("Starting psd2json with document " + doc.name);
+
+  var globalBoundsTranslation = [ 0, 0 ];
+  if (optionOutsideBounds) {
+    globalBoundsTranslation = revealAll(doc);
+  }
+
   var docSnapshot = new snapshot.DocumentSnapshot(doc).prepare();
   logFunc(GLYPH_OKLF);
 
@@ -356,10 +396,15 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
           );
           app.activeDocument = doc;
           exportLayer.path = unescape(savedFile.getRelativeURI(outJsonBaseUri));
+          exportLayer.bounds = translateNumericBounds(
+            unitValueArrayAs(copyBounds[1], "px"),
+            globalBoundsTranslation
+          );
         } else {
           exportLayer.empty = true;
+          exportLayer.bounds = [ 0, 0, 0, 0 ];
         }
-        exportLayer.bounds = unitValueArrayAs(copyBounds[1], "px");
+
         layerSnapshot.setLiveVisible(false);
 
         logFunc(GLYPH_OKLF);
