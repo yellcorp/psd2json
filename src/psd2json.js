@@ -252,6 +252,7 @@ function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
         doc.colorProfileType === ColorProfile.CUSTOM ||
         doc.colorProfileType === ColorProfile.WORKING
       ) ? doc.colorProfileName : "",
+    name: doc.name,
     size: [ doc.width.as("px"), doc.height.as("px") ],
     layers: [ ],
     options: {
