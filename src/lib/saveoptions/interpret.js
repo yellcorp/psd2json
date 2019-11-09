@@ -67,14 +67,9 @@ function interpretUsing(delegate, object) {
 
 
 function interpretOptionsMap(options, defaultOptions) {
-  var delegate;
-  if (options.web) {
-    delegate = delegates.getExporter(options.format);
-  }
-
-  if (!delegate) {
-    delegate = delegates.getSaver(options.format);
-  }
+  var delegate = options.web ?
+    delegates.getExporter(options.format) :
+    delegates.getSaver(options.format);
 
   if (!delegate) {
     return defaultOptions;

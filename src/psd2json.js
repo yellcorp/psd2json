@@ -2,7 +2,7 @@
   $,
   ColorProfile,
   ExportOptionsSaveForWeb,
-  Extension
+  Extension,
   File,
   Folder,
   LayerKind,
@@ -28,21 +28,25 @@ var GLYPH_SKIP = "\u2205 ";
 var GLYPH_OKLF = " \u2713\n";
 var LOG_INDENT = "  ";
 
+
 var DEFAULT_SAVE_OPTIONS = new PNGSaveOptions();
 DEFAULT_SAVE_OPTIONS.compression = 4;
 DEFAULT_SAVE_OPTIONS.interlaced = false;
 
-var NAMER_LOOKUP = {
+
+var NAMING_STRATEGY_LOOKUP = {
   counter:   namers.counterNamer,
   hash:      namers.hashNamer,
   layerPath: namers.layerPathNamer
 };
 
+var DEFAULT_NAMING_STRATEGY = namers.hashNamer;
 
-function unitValueArrayAs(uvs, unitType) {
+
+function unitValueArrayAs(unitValues, unitType) {
   var result = [ ];
-  for (var i = 0; i < uvs.length; i++) {
-    result.push(uvs[i].as(unitType));
+  for (var i = 0; i < unitValues.length; i++) {
+    result.push(unitValues[i].as(unitType));
   }
   return result;
 }
@@ -82,7 +86,11 @@ function flattenedTrimmedCopy(doc, newDocumentName) {
   } else {
     flatDoc.crop(bounds);
   }
-  return [ flatDoc, bounds ];
+
+  return {
+    document: flatDoc,
+    bounds: bounds
+  };
 }
 
 
@@ -95,29 +103,104 @@ function documentNameForLayer(layerSnapshot) {
 }
 
 
-function saveLayerDoc(doc, inFolder, baseName, formatObject) {
-  var saveOptions = interpretSaveOptions(formatObject, DEFAULT_SAVE_OPTIONS);
+function saveLayerDoc(doc, inFolder, baseName, saveOptions) {
   var formatExtension = psutil.fileSuffixForSaveOptions(saveOptions);
   var file = new File(
     inFolder.absoluteURI + "/" +
     escape(baseName + formatExtension)
   );
   file.parent.create();
-  app.activeDocument = doc;
 
+  app.activeDocument = doc;
   if (saveOptions instanceof ExportOptionsSaveForWeb) {
     psutil.saveForWeb(doc, file, saveOptions);
   } else {
     doc.saveAs(file, saveOptions, true, Extension.LOWERCASE);
   }
   doc.close(SaveOptions.DONOTSAVECHANGES);
+
   return file;
 }
 
 
-var SKIP = 0;
-var EXPORT = 1;
-var ENTER = 2;
+function serializeDocumentProfile(document) {
+  if (
+    document.colorProfileType === ColorProfile.CUSTOM ||
+    document.colorProfileType === ColorProfile.WORKING
+  ) {
+    return document.colorProfileName;
+  }
+  return "";
+}
+
+
+function initJsonDocument(document) {
+  return {
+    profile: serializeDocumentProfile(document),
+    name: document.name,
+    size: unitValueArrayAs([ document.width, document.height ], "px"),
+    layers: [ ]
+  };
+}
+
+
+function isTraversableLayerSet(layerSnapshot) {
+  // TODO: there was an old comment reading '!hasLayerEffects'. The reasoning
+  // must be that if a folder having layer effects isn't flattened, there's no
+  // way to preserve the appearance of those effects, as they're not backed by
+  // an art layer. A quick glance shows no mention of layer effects in
+  // snapshot.js, so that must be blocking it. Probably an ActionManager thing
+  // if the API reference doesn't mention it.
+  return (
+    layerSnapshot.isLayerSet &&
+    layerSnapshot.clippedLayers.length === 0
+  );
+}
+
+
+function showAndUnlockLayer(layerSnapshot) {
+  layerSnapshot.setLiveVisible(true);
+  if (layerSnapshot.anyLocked) {
+    layerSnapshot.live.allLocked = false;
+  }
+}
+
+
+function serializeLayerCommon(layerSnapshot, out) {
+  out.name = layerSnapshot.name;
+  out.layerPath = layerSnapshot.layerPath.slice();
+  out.indexPath = layerSnapshot.indexPath.slice();
+  out.index = layerSnapshot.index;
+  out.mode = psutil.enumName(layerSnapshot.blendMode);
+}
+
+
+function attachExtraLayerData(dataFunction, layerSnapshot, out) {
+  if (dataFunction) {
+    var extraData = dataFunction(layerSnapshot);
+    if (typeof extraData !== "undefined") {
+      out.data = extraData;
+    }
+  }
+}
+
+
+function serializeLayerText(layerSnapshot, out) {
+  // TODO: textItem has a ton of other properties you could export
+  out.text = layerSnapshot.textItem.contents;
+}
+
+
+function makeFullyOpaque(layerSnapshot) {
+  if (layerSnapshot.opacity < 100) {
+    layerSnapshot.live.opacity = 100;
+  }
+
+  if (layerSnapshot.isArtLayer && layerSnapshot.fillOpacity < 100) {
+    layerSnapshot.live.fillOpacity = 100;
+  }
+}
+
 
 function makeConstFunc(value) {
   return function () {
@@ -125,48 +208,258 @@ function makeConstFunc(value) {
   };
 }
 
+
 function coerceBooleanFunction(funcOrBool, defaultIfUndef) {
   if (funcOrBool == null) {
     return coerceBooleanFunction(defaultIfUndef, false);
   }
+
   if (typeof funcOrBool === "function") {
     return funcOrBool;
   }
+
   return makeConstFunc(Boolean(funcOrBool));
 }
+
 
 function log(text) {
   $.write(text);
 }
 
-function dontLog(_) {
-  // no-op
+
+function call(func, arg) {
+  return func ? func(arg) : undefined;
 }
+
+
+var SKIP = "skip";
+var EXPORT = "export";
+var ENTER = "enter";
+
+function Exporter() {
+  // inputs
+  this.document = null;
+  this.outJsonFile = null;
+  this.outLayerImageFolder = null;
+  this.flattenOpacity = true;
+  this.tree = true;
+  this.outsideBounds = false;
+  this.logFunction = null;
+  this.shouldEnterLayerSetFunc = null;
+  this.shouldExportLayerFunc = null;
+  this.extraLayerDataFunc = null;
+  this.generateName = null;
+
+  // derived operation-wide
+  this.globalBoundsTranslation = null;
+}
+(function (proto) {
+  proto.run = function () {
+    app.activeDocument = this.document;
+    this.log("Starting psd2json with document " + this.document.name);
+
+    var outJson = initJsonDocument(this.document);
+    outJson.options = this.serializeExportOptions();
+
+    this.globalBoundsTranslation = this.outsideBounds ?
+      revealAll(this.document) :
+      [ 0, 0 ];
+
+    var documentSnapshot = new snapshot.DocumentSnapshot(this.document);
+    this.traverseContainer(documentSnapshot, outJson.layers, "", 100);
+
+    this.outJsonFile.parent.create();
+    fileutil.writeJson(this.outJsonFile, outJson, { space: " " });
+
+    this.log("Completed psd2json with document " + this.document.name + "\n");
+
+    return 0;
+  };
+
+  proto.serializeExportOptions = function () {
+    return {
+      flattenOpacity: this.flattenOpacity,
+      tree: this.tree,
+      outsideBounds: this.outsideBounds
+    };
+  };
+
+  proto.traverseContainer = function (containerSnapshot, exportArray, logIndent, cumulativeOpacity) {
+    containerSnapshot.prepare();
+    this.log(GLYPH_OKLF);
+
+    for (var index = 0; index < containerSnapshot.layers.length; index++) {
+      var layerSnapshot = containerSnapshot.layers[index];
+      this.processLayer(layerSnapshot, exportArray, logIndent, cumulativeOpacity);
+    }
+
+    containerSnapshot.setLiveVisible(false);
+  };
+
+  proto.processLayer = function (layerSnapshot, exportArray, logIndent, cumulativeOpacity) {
+    var intent = this.decideIntentForLayer(layerSnapshot);
+
+    if (intent.action === SKIP) {
+      this.log(logIndent + GLYPH_SKIP + layerSnapshot.name + "\n");
+      return;
+    }
+
+    var exportLayer = { };
+
+    showAndUnlockLayer(layerSnapshot);
+    serializeLayerCommon(layerSnapshot, exportLayer);
+    attachExtraLayerData(this.extraLayerDataFunc, layerSnapshot, exportLayer);
+
+    if (!this.flattenOpacity) {
+      exportLayer.opacity = this.tree ?
+        layerSnapshot.opacity :
+        (layerSnapshot.opacity * cumulativeOpacity / 100);
+
+      if (layerSnapshot.isArtLayer) {
+        exportLayer.fillOpacity = layerSnapshot.fillOpacity;
+      }
+
+      makeFullyOpaque(layerSnapshot);
+    }
+
+    switch (intent.action) {
+      case ENTER:
+        this.log(logIndent + GLYPH_ENTER + layerSnapshot.name);
+
+        if (this.tree) {
+          exportArray.unshift(exportLayer);
+          exportLayer.set = true;
+          exportLayer.layers = [ ];
+        }
+        // if tree is false, DON'T unshift the exportLayer, just let it
+        // disappear
+
+        this.traverseContainer(
+          layerSnapshot,
+          this.tree ? exportLayer.layers : exportArray,
+          logIndent + LOG_INDENT,
+          cumulativeOpacity * layerSnapshot.opacity / 100
+        );
+        break;
+
+      case EXPORT:
+        this.log(logIndent + GLYPH_EXPORT + layerSnapshot.name);
+
+        exportArray.unshift(exportLayer);
+        this.exportLayer(layerSnapshot, exportLayer, intent.imageSaveOptions);
+        layerSnapshot.setLiveVisible(false);
+
+        this.log(GLYPH_OKLF);
+        break;
+
+      default:
+        throw new Error("Assert: bad action " + intent.action);
+    }
+  };
+
+  proto.decideIntentForLayer = function (layerSnapshot) {
+    if (
+      isTraversableLayerSet(layerSnapshot) &&
+      this.shouldEnterLayerSet(layerSnapshot)
+    ) {
+      return { action: ENTER };
+    }
+
+    var imageSaveOptions = this.shouldExportLayer(layerSnapshot);
+    if (imageSaveOptions) {
+      return {
+        action: EXPORT,
+        imageSaveOptions: imageSaveOptions
+      };
+    }
+
+    return { action: SKIP };
+  };
+
+  proto.exportLayer = function (layerSnapshot, exportLayer, imageSaveOptions) {
+    if (
+      layerSnapshot.isArtLayer &&
+      layerSnapshot.kind === LayerKind.TEXT
+    ) {
+      serializeLayerText(layerSnapshot, exportLayer);
+    }
+
+    var isolatedLayer = flattenedTrimmedCopy(
+      this.document,
+      documentNameForLayer(layerSnapshot)
+    );
+
+    exportLayer.empty = !isolatedLayer.document;
+    if (exportLayer.empty) {
+      exportLayer.path = null;
+      exportLayer.bounds = [ 0, 0, 0, 0 ];
+      return;
+    }
+
+    var filename = call(this.generateName, layerSnapshot);
+    var nativeSaveOptions = interpretSaveOptions(
+      imageSaveOptions,
+      DEFAULT_SAVE_OPTIONS
+    );
+
+    var savedFile = saveLayerDoc(
+      isolatedLayer.document,
+      this.outLayerImageFolder,
+      filename,
+      nativeSaveOptions
+    );
+    app.activeDocument = this.document;
+
+    exportLayer.path = unescape(this.getUriRelativeToJsonPath(savedFile));
+    exportLayer.bounds = translateNumericBounds(
+      unitValueArrayAs(isolatedLayer.bounds, "px"),
+      this.globalBoundsTranslation
+    );
+  };
+
+  proto.getUriRelativeToJsonPath = function (file) {
+    return file.getRelativeURI(this.outJsonFile.parent.absoluteURI);
+  };
+
+  proto.shouldEnterLayerSet = function (layerSnapshot) {
+    return call(this.shouldEnterLayerSetFunc, layerSnapshot);
+  };
+
+  proto.shouldExportLayer = function (layerSnapshot) {
+    return call(this.shouldExportLayerFunc, layerSnapshot);
+  };
+
+  proto.log = function (message) {
+    call(this.logFunction, message);
+  };
+}(Exporter.prototype));
+
 
 /**
  * Exports a Photoshop document's layers as images + JSON metadata.
  *
- * @param {string|File|Document} doc - The document to export. If a String or
- *   File object is passed, it will be opened (or foregrounded if already
- *   open).
- * @param {string|File} outJsonFile - The path of the output JSON metadata.
- * @param {string|Folder} outLayerImageFolder - The root folder to contain
- *   layer image files.
- * @param {Object} options - Options controlling the export.
- * @param {Boolean} [options.flattenOpacity=true] - Whether to flatten layer
+ * @param {string|File|Document} photoshopDocument The document to export. If
+ *   this is a String or File object, it will be opened (or foregrounded if
+ *   already open).
+ * @param {string|File} outJsonFile The path of the output JSON metadata.
+ * @param {string|Folder} outLayerImageFolder The root folder to contain layer
+ *   image files.
+ * @param {Object} options Options controlling the export.
+ * @param {Boolean} [options.flattenOpacity=true] Whether to flatten layer
  *   opacity. If `true` (the default), layers will be exported at their current
- *   opacity. That is for example, a solid layer at 25% opacity will appear 25%
- *   opaque in a PNG file. If `false`, layers will have their opacity set to
- *   100% before exporting, and their original opacity will appear in the JSON
- *   file under an `opacity` property, in the range 0-100.
- * @param {Boolean} [options.exportTree=true] - Whether to reflect the
- *   structure of layer sets (layer folders) in the JSON file. If `true` (the
- *   default), layer sets will appear in the JSON file with a `set` key having
- *   the value `true`, and child layers/sets will appear in a `layers` array of
- *   its own. If `false`, all layer sets will be omitted and all layers will
- *   appear in a root-level 'layers' array in the same order they appear in the
- *   Photoshop document (i.e. a depth-first traversal).
- * @param {Boolean} [options.outsideBounds=false] - Whether to export the
+ *   opacity. For example, a layer set to 25% opacity, containing fully-opaque
+ *   pixels, will appear 25% opaque in the exported image file.  If `false`,
+ *   layers will have their opacity set to 100% before exporting, and their
+ *   original opacity will appear in the JSON file under an `opacity` property,
+ *   in the range 0-100.
+ * @param {Boolean} [options.exportTree=true] Whether to reflect the structure
+ *   of layer sets (layer folders) in the JSON file. If `true` (the default),
+ *   layer sets will appear in the JSON file with a `set` key set to the value
+ *   `true`, and child layers/sets will appear in a `layers` array of its own.
+ *   If `false`, all layer sets will be omitted and all layers will appear in a
+ *   root-level 'layers' array in the same order they appear in the Photoshop
+ *   document (i.e. a depth-first traversal).
+ * @param {Boolean} [options.outsideBounds=false] Whether to export the
  *   entirety of layers that fall outside the document canvas. If `false`,
  *   layers that are partially outside the document canvas will be cropped to
  *   the document edges, and layers that are wholly outside the canvas will be
@@ -174,255 +467,92 @@ function dontLog(_) {
  *   executing Image > Reveal All, though layer coordinates use the top left of
  *   the original document as its origin. This means that layer bounds can be
  *   negative in this mode.
- * @param {Boolean} [options.verbose=false] - If `true`, log progress
+ * @param {Boolean} [options.verbose=false] If `true`, log progress
  *   information to the Debug Console. The default is `false`.
- * @param {Boolean|EnterLayerSetCallback} [options.shouldEnterLayerSet=false] -
+ * @param {Boolean|EnterLayerSetCallback} [options.shouldEnterLayerSet=false]
  *   A {@link EnterLayerSetCallback} that decides whether a layer set should
  *   have its contents exported individually. When a layer set is encountered,
- *   a {@link LayerSnapshot} of it is paassed to this callback, and its return
+ *   a {@link LayerSnapshot} of it is passed to this callback, and its return
  *   value is used. If the callback returns `true`, its contents will be
  *   individually considered for export. If `false`, the layer set is treated
  *   like a flat layer. `true` or `false` can also be used here, which will be
  *   treated like a function that always returns that value for all layer sets.
- * @param {Boolean|ImageFormat|ExportLayerCallback}
- *   [options.shouldExportLayer=true] - A {@link ExportLayerCallback} that
- *   decides whether, and how, a layer should be saved to an image file. If the
- *   callback returns a falsy value, the layer is skipped - it will not be
- *   exported to an image and it won't appear in the JSON metadata. If the
- *   callback returns `true`, the layer will appear in the JSON metadata and be
- *   exported as a PNG with transparency (using the Save As dialog, rather than
- *   Save for Web). Other callback return values are interpreted as an
- *   {@link ImageFormat}. If a literal value is provided instead of a function,
- *   it will be treated as a function that returns that value regardless of
- *   layer.
- * @param {ExtraLayerDataCallback} [options.extraLayerData=null] - A callback
- *   which can add extra data to the layer's exported metadata. If provided, it
- *   is called for each exported layer and layer set, passing in a
- *   `LayerSnapshot`. Its return value appears in a `data` property among the
- *   layer's metadata.
- * @param {string} [options.fileNaming='hash'] - A string specifying the means
- *   of generating layer image filenames. The possible values are: `'hash'`,
- *   which generates a hexadecimal hash from each layer's name, `'counter'`,
- *   which uses a simple increasing counter, and `'layerPath'`, which uses the
+ * @param {Boolean|ImageFormat|ExportLayerCallback} [options.shouldExportLayer=true]
+ *   A {@link ExportLayerCallback} that decides whether, and how, a layer
+ *   should be saved to an image file. If the callback returns a falsy value,
+ *   the layer is skipped - it will not be exported to an image and it won't
+ *   appear in the JSON metadata. If the callback returns `true`, the layer
+ *   will appear in the JSON metadata and be exported as a PNG with
+ *   transparency (using the Save As dialog, rather than Save for Web). Other
+ *   callback return values are interpreted as an {@link ImageFormat}. If a
+ *   literal value is provided instead of a function, it will be treated as a
+ *   function that returns that value regardless of layer.
+ * @param {ExtraLayerDataCallback} [options.extraLayerData=null] A callback
+ *   which returns extra data to be added to the layer's exported metadata. If
+ *   provided, it is called for each layer and layer set that is either entered
+ *   or exported, passing in a `LayerSnapshot`. The value returned by this
+ *   function will appear in a `data` property among the layer's metadata.
+ * @param {string} [options.fileNaming='hash'] A string specifying the means of
+ *   generating layer image filenames. The possible values are: `'hash'`, which
+ *   generates a hexadecimal hash from each layer's name, `'counter'`, which
+ *   uses a simple increasing counter, and `'layerPath'`, which uses the
  *   layer's name, prepended by the names of its parent layer sets if any. All
  *   generated filenames are appended with an extra number to guard against
  *   duplicate names.
  */
-function exportDocument(doc, outJsonFile, outLayerImageFolder, options) {
-  // TODO: this function is too long and the flattened recursion could
-  // probably be clarified
-
-  if (typeof doc === "string") {
-    doc = new File(doc);
-  }
-  if (doc instanceof File) {
-    doc = app.open(doc);
-  }
+function exportDocument(
+  photoshopDocument,
+  outJsonFile,
+  outLayerImageFolder,
+  options
+) {
+  var exporter = new Exporter();
 
   if (typeof outJsonFile === "string") {
-    outJsonFile = new File(outJsonFile);
+    exporter.outJsonFile = new File(outJsonFile);
+  } else if (outJsonFile instanceof File) {
+    exporter.outJsonFile = outJsonFile;
+  } else {
+    throw new Error("outJsonFile must be a string or a File");
   }
 
-  if (!outLayerImageFolder) {
-    outLayerImageFolder = outJsonFile.parent;
+  if (outLayerImageFolder == null) {
+    exporter.outLayerImageFolder = exporter.outJsonFile.parent;
   } else if (typeof outLayerImageFolder === "string") {
-    outLayerImageFolder = new Folder(outLayerImageFolder);
+    exporter.outLayerImageFolder = new Folder(outLayerImageFolder);
+  } else if (outLayerImageFolder instanceof Folder) {
+    exporter.outLayerImageFolder = outLayerImageFolder;
+  } else {
+    throw new Error("outLayerImageFolder, if specified, must be a string or a Folder");
+  }
+
+  if (typeof photoshopDocument === "string") {
+    exporter.document = app.open(new File(photoshopDocument));
+  } else if (photoshopDocument instanceof File) {
+    exporter.document = app.open(photoshopDocument);
+  } else {
+    exporter.document = photoshopDocument;
   }
 
   if (!options) {
     options = { };
   }
 
-  var outJsonBaseUri = outJsonFile.parent.absoluteURI;
+  exporter.flattenOpacity = options.flattenOpacity !== false;
+  exporter.tree = options.tree !== false;
+  exporter.outsideBounds = Boolean(options.outsideBounds);
+  exporter.logFunction = options.verbose ? log : null;
+  exporter.shouldEnterLayerSetFunc = coerceBooleanFunction(options.shouldEnterLayerSet, false);
+  exporter.shouldExportLayerFunc = coerceBooleanFunction(options.shouldExportLayer, true);
+  exporter.extraLayerDataFunc = options.extraLayerData;
 
-  var optionFlattenOpacity = options.flattenOpacity !== false;
-  var optionExportTree = options.tree !== false;
-  var optionOutsideBounds = Boolean(options.outsideBounds);
-  var logFunc = options.verbose ? log : dontLog;
-  var enterFolderCallback = coerceBooleanFunction(options.shouldEnterLayerSet, false);
-  var exportLayerCallback = coerceBooleanFunction(options.shouldExportLayer, true);
-  var extraLayerDataCallback = options.extraLayerData;
+  var namerFactory =
+    NAMING_STRATEGY_LOOKUP[options.fileNaming] ||
+    DEFAULT_NAMING_STRATEGY;
 
-  var namerKey = options.fileNaming;
-  var createNamer = NAMER_LOOKUP[namerKey] || NAMER_LOOKUP.hash;
-  var generateName = createNamer();
+  exporter.generateName = namerFactory();
 
-  var outJson = {
-    profile: (
-        doc.colorProfileType === ColorProfile.CUSTOM ||
-        doc.colorProfileType === ColorProfile.WORKING
-      ) ? doc.colorProfileName : "",
-    name: doc.name,
-    size: [ doc.width.as("px"), doc.height.as("px") ],
-    layers: [ ],
-    options: {
-      flattenedOpacity: optionFlattenOpacity,
-      tree: optionExportTree,
-      outsideBounds: optionOutsideBounds
-    }
-  };
-
-  var stack = [ ];
-
-  logFunc("Starting psd2json with document " + doc.name);
-
-  var globalBoundsTranslation = [ 0, 0 ];
-  if (optionOutsideBounds) {
-    globalBoundsTranslation = revealAll(doc);
-  }
-
-  var docSnapshot = new snapshot.DocumentSnapshot(doc).prepare();
-  logFunc(GLYPH_OKLF);
-
-  stack.push([ docSnapshot, outJson.layers, 0, "", 100 ]);
-
-  while (stack.length > 0) {
-    var state = stack.pop();
-
-    var containerSnapshot = state[0];
-    var exportArray = state[1];
-    var index = state[2];
-    var logIndent = state[3];
-    var cumulativeOpacity = state[4];
-
-    while (index < containerSnapshot.layers.length) {
-      var layerSnapshot = containerSnapshot.layers[index];
-
-      var action = SKIP;
-      var exportCallbackResult = null;
-      if (
-        layerSnapshot.typename === "LayerSet" &&
-        layerSnapshot.clippedLayers.length === 0 &&
-        // TODO: !hasLayerEffects
-        enterFolderCallback(layerSnapshot)
-      ) {
-        action = ENTER;
-      } else {
-        exportCallbackResult = exportLayerCallback(layerSnapshot);
-        if (exportCallbackResult) {
-          action = EXPORT;
-        }
-      }
-
-      var exportLayer, clientData;
-      // eslint-disable-next-line no-negated-condition
-      if (action !== SKIP) {
-        layerSnapshot.setLiveVisible(true);
-        if (layerSnapshot.anyLocked) {
-          layerSnapshot.live.allLocked = false;
-        }
-
-        exportLayer = {
-          name: layerSnapshot.name,
-          layerPath: layerSnapshot.layerPath.slice(),
-          indexPath: layerSnapshot.indexPath.slice(),
-          index: layerSnapshot.index,
-          mode: psutil.enumName(layerSnapshot.blendMode)
-        };
-        exportArray.unshift(exportLayer);
-
-        if (extraLayerDataCallback) {
-          clientData = extraLayerDataCallback(layerSnapshot);
-        }
-
-        if (typeof clientData !== "undefined") {
-          exportLayer.data = clientData;
-        }
-
-        if (!optionFlattenOpacity) {
-          exportLayer.opacity = optionExportTree ?
-            layerSnapshot.opacity :
-            (layerSnapshot.opacity * cumulativeOpacity / 100);
-
-          if (layerSnapshot.opacity < 100) {
-            layerSnapshot.live.opacity = 100;
-          }
-        }
-      } else {
-        logFunc(logIndent + GLYPH_SKIP + layerSnapshot.name + "\n");
-      }
-
-      if (action === ENTER) {
-        logFunc(logIndent + GLYPH_ENTER + layerSnapshot.name);
-
-        stack.push([
-          containerSnapshot,
-          exportArray,
-          index + 1,
-          logIndent,
-          cumulativeOpacity
-        ]);
-
-        cumulativeOpacity *= layerSnapshot.opacity / 100;
-        if (optionExportTree) {
-          exportLayer.set = true;
-          exportLayer.layers = [ ];
-          exportArray = exportLayer.layers;
-        } else {
-          exportArray.shift();
-        }
-
-        containerSnapshot = layerSnapshot.prepare();
-        logIndent += LOG_INDENT;
-        index = -1; // incremented to 0 at end of loop
-
-        logFunc(GLYPH_OKLF);
-      } else if (action === EXPORT) {
-        logFunc(logIndent + GLYPH_EXPORT + layerSnapshot.name);
-
-        if (layerSnapshot.typename === "ArtLayer") {
-          if (!optionFlattenOpacity) {
-            exportLayer.fillOpacity = layerSnapshot.fillOpacity;
-            if (layerSnapshot.fillOpacity < 100) {
-              layerSnapshot.live.fillOpacity = 100;
-            }
-          }
-
-          if (layerSnapshot.kind === LayerKind.TEXT) {
-            // TODO: textItem has a ton of other properties you could export
-            exportLayer.text = layerSnapshot.textItem.contents;
-          }
-        }
-
-        var copyBounds = flattenedTrimmedCopy(
-          doc,
-          documentNameForLayer(layerSnapshot)
-        );
-
-        var layerDoc = copyBounds[0];
-        if (layerDoc) {
-          var savedFile = saveLayerDoc(
-            layerDoc,
-            outLayerImageFolder,
-            generateName(layerSnapshot),
-            exportCallbackResult
-          );
-          app.activeDocument = doc;
-          exportLayer.path = unescape(savedFile.getRelativeURI(outJsonBaseUri));
-          exportLayer.bounds = translateNumericBounds(
-            unitValueArrayAs(copyBounds[1], "px"),
-            globalBoundsTranslation
-          );
-        } else {
-          exportLayer.empty = true;
-          exportLayer.bounds = [ 0, 0, 0, 0 ];
-        }
-
-        layerSnapshot.setLiveVisible(false);
-
-        logFunc(GLYPH_OKLF);
-      }
-      index++;
-    }
-    containerSnapshot.setLiveVisible(false);
-  }
-
-  outJsonFile.parent.create();
-  fileutil.writeJson(outJsonFile, outJson, { space: " " });
-
-  logFunc("Completed psd2json with document " + doc.name);
-
-  return 0;
+  return exporter.run();
 }
 
 
