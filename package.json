@@ -1,7 +1,7 @@
 {
   "name": "@yellcorp/psd2json",
-  "version": "0.0.9",
-  "description": "Export PSDs to JSON+images",
+  "version": "0.0.10-rc1",
+  "description": "Export PSDs to JSON+PNGs",
   "keywords": [
     "adobe",
     "export",
@@ -11,23 +11,24 @@
     "psd"
   ],
   "license": "MIT",
-  "author": "Jim Boswell <jimb@yellcorp.org> (http://yellcorp.org)",
+  "author": "Jim Boswell <jimb@yellcorp.org> (https://yellcorp.org)",
   "repository": {
     "type": "git",
     "url": "https://github.com/yellcorp/psd2json.git"
   },
-  "files": [
-    "src"
-  ],
-  "main": "src/psd2json.js",
-  "devDependencies": {
-    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.6",
-    "eslint": "^4.18.2"
-  },
   "scripts": {
-    "lint": "eslint -- src/**/*.js"
+    "build": "npm run build-rollup",
+    "build-rollup": "rollup --config rollup.config.mjs",
+    "format": "prettier --write ."
   },
-  "peerDependencies": {
-    "@yellcorp/extendscript-commonjs": "github:yellcorp/extendscript-commonjs#v0.0.6"
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^12.1.1",
+    "@trivago/prettier-plugin-sort-imports": "^4.3.0",
+    "@types/node": "^20.17.6",
+    "prettier": "^3.3.3",
+    "rollup": "^4.25.0",
+    "tslib": "^2.8.1",
+    "types-for-adobe": "^7.2.2",
+    "typescript": "~5.4"
   }
 }
