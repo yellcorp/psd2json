@@ -1,3 +1,11 @@
+export function arrayCopy<E>(array: ArrayLike<E>): E[] {
+  const copy: E[] = [];
+  for (let i = 0; i < array.length; i++) {
+    copy.push(array[i]);
+  }
+  return copy;
+}
+
 export function arrayForEach<E>(
   array: ArrayLike<E>,
   fn: (element: E, index: number, array: ArrayLike<E>) => void,
@@ -18,13 +26,30 @@ export function arrayMap<E, R>(
   return result;
 }
 
-export function arrayContains<E>(haystack: ArrayLike<E>, needle: E) {
-  for (let i = 0; i < haystack.length; i++) {
-    if (haystack[i] === needle) {
-      return true;
+export function arrayFilter<E>(
+  array: ArrayLike<E>,
+  fn: (element: E, index: number, array: ArrayLike<E>) => boolean,
+): E[] {
+  const result: E[] = [];
+  for (let i = 0; i < array.length; i++) {
+    if (fn(array[i], i, array)) {
+      result.push(array[i]);
     }
   }
-  return false;
+  return result;
+}
+
+export function arrayIndexOf<E>(haystack: ArrayLike<E>, needle: E) {
+  for (let i = 0; i < haystack.length; i++) {
+    if (haystack[i] === needle) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+export function arrayContains<E>(haystack: ArrayLike<E>, needle: E) {
+  return arrayIndexOf(haystack, needle) !== -1;
 }
 
 export function arrayReduce<E, R>(
